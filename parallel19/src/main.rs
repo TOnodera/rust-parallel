@@ -39,11 +39,6 @@ impl Future for Delay {
     }
 }
 
-struct MiniTokio {
-    scheduled: crossbeam::channel::Receiver<Arc<Task>>,
-    sender: crossbeam::channel::Sender<Arc<Task>>,
-}
-
 struct Task {
     future: Mutex<Pin<Box<dyn Future<Output = ()> + Send>>>,
     executor: crossbeam::channel::Sender<Arc<Task>>,
@@ -62,12 +57,29 @@ impl Task {
 
         let _ = future.as_mut().poll(&mut cx);
     }
+
+    fn spawn<F>(future: F, sender: &crossbeam::channel::Sender<Arc<Task>>)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let task = Arc::new(Task {
+            future: Mutex::new(Box::pin(future)),
+            executor: sender.clone(),
+        });
+
+        let _ = sender.send(task);
+    }
 }
 
 impl ArcWake for Task {
     fn wake_by_ref(arc_self: &Arc<Self>) {
         arc_self.schedule();
     }
+}
+
+struct MiniTokio {
+    scheduled: crossbeam::channel::Receiver<Arc<Task>>,
+    sender: crossbeam::channel::Sender<Arc<Task>>,
 }
 
 impl MiniTokio {
@@ -92,5 +104,19 @@ impl MiniTokio {
 }
 
 fn main() {
-    todo!()
+    let mut mini_tokio = MiniTokio::new();
+
+    for i in 1..=10 {
+        mini_tokio.spawn(async move {
+            let when = Instant::now() + Duration::from_micros(10000000);
+            let future = Delay { when };
+
+            println!("{}", i);
+
+            let out = future.await;
+            assert_eq!(out, "done");
+        });
+    }
+
+    mini_tokio.run();
 }
